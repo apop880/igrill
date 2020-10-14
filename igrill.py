@@ -29,6 +29,7 @@ class UUIDS(object):
     PROBE4_TEMPERATURE = btle.UUID('06ef0008-2e06-4b79-9e33-fce2c42805ec')
     PROBE4_THRESHOLD   = btle.UUID('06ef0009-2e06-4b79-9e33-fce2c42805ec')
     HEATING_ELEMENTS   = btle.UUID('6c91000a-58dc-41c7-943f-518b278ceaaa')
+    PROPANE_LEVEL      = btle.UUID('f5d40001-3548-4c22-9947-f3673fce3cd9')
 
 
 class IDevicePeripheral(btle.Peripheral):
@@ -36,8 +37,9 @@ class IDevicePeripheral(btle.Peripheral):
     btle_lock = threading.Lock()
     has_battery = None
     has_heating_element = None
+    has_propane_sensor = None
 
-    def __init__(self, address, name, num_probes, has_battery=True, has_heating_element=False):
+    def __init__(self, address, name, num_probes, has_battery=True, has_heating_element=False, has_propane_sensor=False):
         """
         Connects to the device given by address performing necessary authentication
         """
@@ -49,6 +51,7 @@ class IDevicePeripheral(btle.Peripheral):
         self.name = name
         self.has_battery = has_battery
         self.has_heating_element = has_heating_element
+        self.has_propane_sensor = has_propane_sensor
         # iDevice devices require bonding. I don't think this will give us bonding
         # if no bonding exists, so please use bluetoothctl to create a bond first
         self.setSecurityLevel('medium')
@@ -63,6 +66,10 @@ class IDevicePeripheral(btle.Peripheral):
         # Set handle for reading main elements
         if has_heating_element:
             self.heating_elements = self.characteristic(UUIDS.HEATING_ELEMENTS)
+
+        # Set handle for reading propane level
+        if has_propane_sensor:
+            self.propane_level = self.characteristic(UUIDS.PROPANE_LEVEL)
 
         # authenticate with iDevices custom challenge/response protocol
         if not self.authenticate():
@@ -124,6 +131,9 @@ class IDevicePeripheral(btle.Peripheral):
     def read_heating_elements(self):
         return bytearray(self.heating_elements.read()) if self.has_heating_element else None
 
+    def read_propane_level(self):
+        return float(bytearray(self.propane_level.read())[0])*25 if self.has_propane_sensor else None
+
     def read_temperature(self, publish_empty, missing_value):
         empty = False if not publish_empty else missing_value
         temps = {1: False, 2: False, 3: False, 4: False}
@@ -163,7 +173,7 @@ class IGrillV3Peripheral(IDevicePeripheral):
 
     def __init__(self, address, name='igrill_v3', num_probes=4):
         logging.debug("Created new device with name {}".format(name))
-        IDevicePeripheral.__init__(self, address, name, num_probes)
+        IDevicePeripheral.__init__(self, address, name, num_probes, has_propane_sensor=True)
 
 
 class Pulse2000Peripheral(IDevicePeripheral):
@@ -215,7 +225,8 @@ class DeviceThread(threading.Thread):
                     temperature = device.read_temperature(self.publish_missing_probes, self.missing_probe_value)
                     battery = device.read_battery()
                     heating_element = device.read_heating_elements()
-                    utils.publish(temperature, battery, heating_element, self.mqtt_client, self.topic, device.name)
+                    propane_level = device.read_propane_level()
+                    utils.publish(temperature, battery, heating_element, propane_level, self.mqtt_client, self.topic, device.name)
                     logging.debug("Published temp: {} and battery: {} to topic {}/{}".format(temperature, battery, self.topic, device.name))
                     logging.debug("Sleeping for {} seconds".format(self.interval))
                     time.sleep(self.interval)
